@@ -1,0 +1,93 @@
+name: Export YOLO26 to Apple Core AI
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_path:
+        description: "リポジトリ内の学習済み .pt のパス"
+        required: true
+        default: "best.pt"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: xcode-27-arm64
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Export NMS-free Core AI model
+        env:
+          MODEL_PATH: ${{ inputs.model_path }}
+        run: |
+          set -euo pipefail
+          test -f "$MODEL_PATH"
+          mkdir -p artifacts
+
+          uv run --no-project --with ultralytics --with coreai-torch python - <<'PY'
+          import os
+
+          import torch
+          from coreai_torch import TorchConverter, get_decomp_table
+          from ultralytics import YOLO
+
+          yolo = YOLO(os.environ["MODEL_PATH"])
+          model = yolo.model.cpu().float().eval()
+          head = model.model[-1]
+
+          if yolo.task != "detect" or head.nc != 6:
+              raise ValueError("硬貨6クラスで学習した物体検出モデルを指定してください。")
+          if not getattr(head, "end2end", False):
+              raise ValueError("end-to-end検出ヘッドを持つYOLO26モデルが必要です。")
+
+          # 推論結果のテンソルだけを返す。NMSは追加しない。
+          head.export = True
+          head.format = "onnx"
+
+          image = torch.zeros((1, 3, 640, 640), dtype=torch.float32)
+          with torch.no_grad():
+              detections = model(image)
+
+          if (
+              not isinstance(detections, torch.Tensor)
+              or detections.ndim != 3
+              or detections.shape[0] != 1
+              or detections.shape[-1] != 6
+          ):
+              raise ValueError("期待する検出出力は [1, N, 6] です。")
+          print("PyTorch output shape:", tuple(detections.shape))
+
+          exported = torch.export.export(model, args=(image,))
+          exported = exported.run_decompositions(get_decomp_table())
+
+          program = (
+              TorchConverter()
+              .add_exported_program(
+                  exported,
+                  input_names=["image"],
+                  output_names=["detections"],
+              )
+              .to_coreai()
+          )
+          program.save_asset("artifacts/best.aimodel")
+          PY
+
+          test -s artifacts/best.aimodel
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coin-detector-coreai-640
+          path: artifacts/best.aimodel
+          if-no-files-found: error
