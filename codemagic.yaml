@@ -39,7 +39,7 @@ workflows:
           mkdir -p artifacts
 
           uv run --no-project --python 3.11 --prerelease allow \
-            --with ultralytics --with coreai-torch python - <<'PY'
+            --with ultralytics --with coreai-torch --with 'torch==2.13.0' python - <<'PY'
           import os
 
           import torch
@@ -52,8 +52,14 @@ workflows:
 
           if yolo.task != "detect" or head.nc != 6:
               raise ValueError("硬貨6クラスで学習した物体検出モデルを指定してください。")
-          if not getattr(head, "end2end", False):
-              raise ValueError("end-to-end検出ヘッドを持つYOLO26モデルが必要です。")
+          if any(
+              getattr(head, branch, None) is None
+              for branch in ("one2one_cv2", "one2one_cv3")
+          ):
+              raise ValueError("指定した .pt に one-to-one 検出ヘッドがありません。")
+          head.end2end = True
+          if not head.end2end:
+              raise ValueError("one-to-one 推論を有効にできませんでした。")
 
           # 推論結果のテンソルだけを返す。NMSは追加しない。
           head.export = True
