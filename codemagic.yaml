@@ -78,8 +78,20 @@ workflows:
               raise ValueError("期待する検出出力は [1, N, 6] です。")
           print("PyTorch output shape:", tuple(detections.shape))
 
+          def decompose_scalar_remainder(indices, divisor):
+              # YOLO uses this remainder to recover class IDs from TopK indices.
+              quotient = torch.floor_divide(indices, divisor)
+              return indices - quotient * divisor
+
           exported = torch.export.export(model, args=(image,))
-          exported = exported.run_decompositions(get_decomp_table())
+          decompositions = get_decomp_table()
+          remainder = torch.ops.aten.remainder.Scalar
+          decompositions[remainder] = decompose_scalar_remainder
+          exported = exported.run_decompositions(decompositions)
+          if any(node.target == remainder for node in exported.graph.nodes):
+              raise RuntimeError("aten.remainder.Scalar remains in the Core AI export graph.")
+          with torch.no_grad():
+              torch.testing.assert_close(exported.module()(image), detections)
 
           program = (
               TorchConverter()
