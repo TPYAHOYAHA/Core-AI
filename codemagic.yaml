@@ -42,6 +42,7 @@ workflows:
             --with ultralytics --with coreai-torch --with 'torch==2.13.0' python - <<'PY'
           import os
           from copy import deepcopy
+          from pathlib import Path
 
           import torch
           from coreai_torch import TorchConverter, get_decomp_table
@@ -109,11 +110,12 @@ workflows:
               )
               .to_coreai()
           )
-          program.save_asset("artifacts/best.aimodel")
+          program.save_asset(Path("artifacts/best.aimodel"))
           PY
 
-          test -f artifacts/best.aimodel
-          test -s artifacts/best.aimodel
+          cd artifacts
+          zip -r coin-detector-coreai-640.zip best.aimodel
+          unzip -t coin-detector-coreai-640.zip
 
     artifacts:
-      - artifacts/best.aimodel
+      - artifacts/coin-detector-coreai-640.zip
